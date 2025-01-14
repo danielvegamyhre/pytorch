@@ -30,10 +30,10 @@ from torch._subclasses.fake_tensor import (
     _CacheKeyState,
     DynamicOutputShapeException,
     extract_tensor_metadata,
-    MetadataMismatchError,
     FakeTensor,
     FakeTensorConverter,
     FakeTensorMode,
+    MetadataMismatchError,
     unset_fake_temporarily,
     UnsupportedOperatorException,
 )
@@ -163,6 +163,20 @@ class FakeTensorTest(TestCase):
         with FakeTensorMode():
             x = torch.rand([2048], device="cuda")
             out = x[torch.zeros([36], dtype=torch.int64)]
+            self.checkType(out, "cuda", [36])
+
+    @unittest.skipIf(
+        TEST_WITH_TORCHDYNAMO, "isinstance check for FakeTensor won't work with compile"
+    )
+    @unittest.skipIf(not RUN_CUDA, "requires cuda")
+    @parametrize(
+        "fp8_dtype",
+        [torch.float8_e4m3fn, torch.float8_e5m2],
+    )
+    def test_index_cuda_fp8(self, fp8_dtype):
+        with FakeTensorMode():
+            x = torch.ones([2048], device="cuda", dtype=fp8_dtype)
+            out = x[torch.zeros([36], dtype=torch.int64, device="cuda")]
             self.checkType(out, "cuda", [36])
 
     @unittest.skipIf(not RUN_CUDA, "requires cuda")
@@ -1398,13 +1412,11 @@ class FakeTensorOperatorInvariants(TestCase):
                 self.assertTrue("output[0]" not in str(e))
                 if self.__class__.__name__.startswith("PropagateRealTensors"):
                     self.assertTrue(
-                        "Real tensor propagation found a metadata mismatch"
-                        in str(e)
+                        "Real tensor propagation found a metadata mismatch" in str(e)
                     )
                 else:
                     self.assertTrue(
-                        "found mismatched tensor metadata for output"
-                        in str(e)
+                        "found mismatched tensor metadata for output" in str(e)
                     )
 
     # IMPORTANT!!! Always run even if CUDA is not available
@@ -1954,7 +1966,6 @@ class FakeTensorDispatchCache(TestCase):
                 extract_tensor_metadata(res4),
             )
 
-
     @unittest.skipIf(not RUN_CUDA, "requires cuda")
     def test_wrapper_tensor_subclass_different_device(self):
         class DifferentDeviceTensor(torch.Tensor):
@@ -1988,8 +1999,12 @@ class FakeTensorDispatchCache(TestCase):
             def __torch_dispatch__(cls, func, types, args, kwargs):
                 if kwargs is None:
                     kwargs = {}
-                args = pytree.tree_map_only(DifferentDeviceTensor, lambda x: x.inner_tensor, args)
-                kwargs = pytree.tree_map_only(DifferentDeviceTensor, lambda x: x.inner_tensor, kwargs)
+                args = pytree.tree_map_only(
+                    DifferentDeviceTensor, lambda x: x.inner_tensor, args
+                )
+                kwargs = pytree.tree_map_only(
+                    DifferentDeviceTensor, lambda x: x.inner_tensor, kwargs
+                )
                 # Returns unwrapped tensor
                 return func(*args, **kwargs)
 
@@ -2006,7 +2021,6 @@ class FakeTensorDispatchCache(TestCase):
         self.assertTrue(fake_wrapped_a.is_cpu)
         assert isinstance(fake_wrapped_a, DifferentDeviceTensor)
         self.assertFalse(fake_wrapped_a.inner_tensor.is_cpu)
-
 
     def test_cache_tuple_outputs(self):
         """
